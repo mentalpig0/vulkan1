@@ -20,6 +20,44 @@
 #include <array>
 #include <optional>
 #include <set>
+#include <random>
+
+#include <cmath>
+#include <iostream>
+#include <vector>
+
+#include <glm/glm.hpp>
+
+class integrator {
+private:
+    glm::vec3 acceleration_function(const glm::vec3& position, const glm::vec3& velocity, const glm::vec3& acceleration) const {
+        return acceleration;
+    }
+
+public:
+    void integrate(glm::vec3& position, glm::vec3& velocity, const glm::vec3& constant_acceleration, float delta_time) {
+        glm::vec3 k1_velocity = velocity;
+        glm::vec3 k1_acceleration = acceleration_function(position, velocity, constant_acceleration);
+        
+        glm::vec3 k2_position = position + k1_velocity * (delta_time * 0.5f);
+        glm::vec3 k2_velocity = velocity + k1_acceleration * (delta_time * 0.5f);
+        glm::vec3 k2_acceleration = acceleration_function(k2_position, k2_velocity, constant_acceleration);
+        
+        glm::vec3 k3_position = position + k2_velocity * (delta_time * 0.5f);
+        glm::vec3 k3_velocity = velocity + k2_acceleration * (delta_time * 0.5f);
+        glm::vec3 k3_acceleration = acceleration_function(k3_position, k3_velocity, constant_acceleration);
+        
+        glm::vec3 k4_position = position + k3_velocity * delta_time;
+        glm::vec3 k4_velocity = velocity + k3_acceleration * delta_time;
+        glm::vec3 k4_acceleration = acceleration_function(k4_position, k4_velocity, constant_acceleration);
+        
+        glm::vec3 position_derivative = (k1_velocity + k2_velocity * 2.0f + k3_velocity * 2.0f + k4_velocity) * (1.0f / 6.0f);
+        glm::vec3 velocity_derivative = (k1_acceleration + k2_acceleration * 2.0f + k3_acceleration * 2.0f + k4_acceleration) * (1.0f / 6.0f);
+        
+        position += position_derivative * delta_time;
+        velocity += velocity_derivative * delta_time;
+    }
+};
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -58,11 +96,15 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
     }
 }
 
+
+
 struct GameObject
 {
-	glm::vec3 position = {0.0f, 0.0f, 0.0f};
-	glm::vec3 rotation = {0.0f, 0.0f, 0.0f};
-	glm::vec3 scale    = {1.0f, 1.0f, 1.0f};
+    glm::vec3 position = {0.0f, 0.0f, 0.0f};
+    glm::vec3 velocity = {0.0f, 0.0f, 0.0f};
+    glm::vec3 acceleration = {0.0f, 0.0f, 0.0f};
+    glm::vec3 rotation = {0.0f, 0.0f, 0.0f};
+    glm::vec3 scale = {1.0f, 1.0f, 1.0f};
 
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
@@ -243,6 +285,8 @@ private:
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
 
+    integrator physics_integrator;
+
     bool framebufferResized = false;
 
     void initWindow() {
@@ -308,15 +352,15 @@ private:
         }
         swapChainImageViews.clear();
 
-        vkDestroyImageView(device, depthImageView, nullptr);
-        vkDestroyImage(device, depthImage, nullptr);
-        vkFreeMemory(device, depthImageMemory, nullptr);
-
         vkDestroySwapchainKHR(device, swapChain, nullptr);
     }
 
     void cleanup() {
         cleanupSwapChain();
+
+        vkDestroyImageView(device, depthImageView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthImageMemory, nullptr);
 
         for (auto& gameObject : gameObjects) {
             for (size_t i = 0; i < gameObject.uniformBuffers.size(); i++) {
@@ -348,10 +392,6 @@ private:
         vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-        vkDestroyImageView(device, depthImageView, nullptr);
-        vkDestroyImage(device, depthImage, nullptr);
-        vkFreeMemory(device, depthImageMemory, nullptr);
-
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -374,16 +414,22 @@ private:
     }
 
     void setupGameObjects() {
+        // First object - center, upward movement with some horizontal velocity
         gameObjects[0].position = {0.0f, 0.0f, 0.0f};
-        gameObjects[0].rotation = {0.0f, 0.0f, 0.0f};
+        gameObjects[0].velocity = {1.0f, 3.0f, 0.5f};
+        gameObjects[0].acceleration = {0.0f, -5.0f, 0.0f}; // Gravity only
         gameObjects[0].scale = {1.0f, 1.0f, 1.0f};
 
-        gameObjects[1].position = {-2.0f, 0.0f, -1.0f};
-        gameObjects[1].rotation = {0.0f, glm::radians(45.0f), 0.0f};
+        // Second object - left, circular-like motion
+        gameObjects[1].position = {-2.0f, 1.0f, -1.0f};
+        gameObjects[1].velocity = {2.0f, 0.0f, 1.5f};
+        gameObjects[1].acceleration = {0.0f, -3.0f, 0.0f};
         gameObjects[1].scale = {0.75f, 0.75f, 0.75f};
 
-        gameObjects[2].position = {2.0f, 0.0f, -1.0f};
-        gameObjects[2].rotation = {0.0f, glm::radians(-45.0f), 0.0f};
+        // Third object - right, fast diagonal movement
+        gameObjects[2].position = {2.0f, -1.0f, 1.0f};
+        gameObjects[2].velocity = {-2.5f, 4.0f, -1.0f};
+        gameObjects[2].acceleration = {0.0f, -6.0f, 0.0f};
         gameObjects[2].scale = {0.75f, 0.75f, 0.75f};
     }
 
@@ -407,25 +453,6 @@ private:
         return imageView;
     }
 
-    void createUniformBuffers() {
-        for (auto& gameObject : gameObjects) {
-            gameObject.uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            gameObject.uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-            gameObject.uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-
-            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-                
-                createBuffer(bufferSize, 
-                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                            gameObject.uniformBuffers[i], 
-                            gameObject.uniformBuffersMemory[i]);
-
-                vkMapMemory(device, gameObject.uniformBuffersMemory[i], 0, bufferSize, 0, &gameObject.uniformBuffersMapped[i]);
-            }
-        }
-    }
 
     void createImage(uint32_t width, uint32_t height, VkFormat format,
                     VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
@@ -592,18 +619,17 @@ private:
     }
 
     void recreateSwapChain() {
-        int width = 0, height = 0;
-        while (width == 0 || height == 0) {
-            glfwGetFramebufferSize(window, &width, &height);
-            glfwWaitEvents();
-        }
-
         vkDeviceWaitIdle(device);
-
+        
         cleanupSwapChain();
-
+        
+        vkDestroyPipeline(device, graphicsPipeline, nullptr);
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+        
         createSwapChain();
         createImageViews();
+        createRenderPass();
+        createGraphicsPipeline();
         createDepthResources();
         createFramebuffers();
     }
@@ -1081,14 +1107,14 @@ void createRenderPass() {
     }
 
     void createUniformBuffers() {
-        VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
         for (auto& gameObject : gameObjects) {
             gameObject.uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             gameObject.uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
             gameObject.uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+                
                 createBuffer(bufferSize, 
                             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1331,34 +1357,63 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
 
     void updateUniformBuffer(uint32_t currentImage) {
         static auto startTime = std::chrono::high_resolution_clock::now();
+        static auto lastTime = startTime;
         auto currentTime = std::chrono::high_resolution_clock::now();
         float time = std::chrono::duration<float>(currentTime - startTime).count();
+        float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+        lastTime = currentTime;
 
-        // Camera matrices (same for all objects)
-        glm::mat4 view = glm::lookAt(glm::vec3(2.0f, 2.0f, 6.0f), 
+        for (auto& gameObject : gameObjects) {
+            physics_integrator.integrate(
+                gameObject.position, 
+                gameObject.velocity, 
+                gameObject.acceleration, 
+                deltaTime
+            );
+            
+            const float bounds = 5.0f;
+            for (int i = 0; i < 3; i++) {
+                if (std::abs(gameObject.position[i]) > bounds) {
+                    gameObject.velocity[i] *= -1.0f;
+                    gameObject.position[i] = std::clamp(gameObject.position[i], -bounds, bounds);
+                }
+            }
+            
+            gameObject.rotation += gameObject.velocity * deltaTime * 0.5f;
+        }
+
+        glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 3.0f, 8.0f), 
                                     glm::vec3(0.0f, 0.0f, 0.0f), 
                                     glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 proj = glm::perspective(glm::radians(45.0f),
                                         swapChainExtent.width / (float)swapChainExtent.height,
-                                        0.1f, 20.0f);
+                                        0.1f, 50.0f);
         proj[1][1] *= -1;
 
-        // Update each object
         for (size_t i = 0; i < gameObjects.size(); i++) {
-            // Add some animation
-            gameObjects[i].rotation.y = time * glm::radians(45.0f) + (i * glm::radians(120.0f));
-            
             UniformBufferObject ubo{};
             ubo.model = gameObjects[i].getModelMatrix();
             ubo.view = view;
             ubo.proj = proj;
-
-            // Copy to the current frame's uniform buffer
             memcpy(gameObjects[i].uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
         }
     }
 
     void drawFrame() {
+        static auto lastFpsTime = std::chrono::high_resolution_clock::now();
+        static int frameCount = 0;
+        frameCount++;
+        
+        // Check if 1 second has passed for FPS calculation
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastFpsTime).count();
+        
+        if (elapsed >= 1000) {
+            std::cout << "FPS: " << frameCount << std::endl;
+            frameCount = 0;
+            lastFpsTime = currentTime;
+        }
+
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
         uint32_t imageIndex;
