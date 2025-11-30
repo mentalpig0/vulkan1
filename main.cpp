@@ -346,7 +346,6 @@ private:
         createVertexBuffer();
         createIndexBuffer();
         
-        setupGameObjects();
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -433,13 +432,6 @@ private:
 
         glfwDestroyWindow(window);
         glfwTerminate();
-    }
-
-    void setupGameObjects() {
-        createObject()
-            .setPosition(0.0f, 0.0f, 0.0f)
-            .setScale(0.5f)
-            .setColor(1.0f, 0.0f, 0.0f);
     }
 
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
@@ -1404,8 +1396,6 @@ void createRenderPass() {
                 gameObject.acceleration, 
                 deltaTime
             );
-            
-            gameObject.rotation.y += deltaTime * 0.5f;
         }
 
         glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 3.0f, 8.0f), 
@@ -1726,48 +1716,9 @@ int main() {
             .setVelocity(-1.5f, 0.0f, 0.0f)
             .setAcceleration(0.0f, -3.0f, 0.0f)
             .setColor(0.0f, 0.0f, 1.0f);  // Blue
-
-        std::cout << "Running with 2 colored cubes - one red, one blue" << std::endl;
         
         app.run();
 
-    } catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    return EXIT_SUCCESS;
-}
-    static std::vector<char> readFile(const std::string& filename) {
-        std::ifstream file(filename, std::ios::ate | std::ios::binary);
-
-        if (!file.is_open()) {
-            throw std::runtime_error("failed to open file!");
-        }
-
-        size_t fileSize = (size_t) file.tellg();
-        std::vector<char> buffer(fileSize);
-
-        file.seekg(0);
-        file.read(buffer.data(), fileSize);
-
-        file.close();
-
-        return buffer;
-    }
-
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-
-        return VK_FALSE;
-    }
-};
-
-int main() {
-    HelloTriangleApplication app;
-
-    try {
-        app.run();
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return EXIT_FAILURE;
