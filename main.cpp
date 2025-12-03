@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <random>
+#include <unordered_map>
 
 #include <cmath>
 #include <iostream>
@@ -63,6 +64,83 @@ public:
         
         position += position_derivative * delta_time;
         velocity += velocity_derivative * delta_time;
+    }
+};
+
+class Camera {
+public:
+    glm::vec3 position = glm::vec3(0.0f, 3.0f, 8.0f);
+    glm::vec3 front = glm::vec3(0.0f, 0.0f, -1.0f);
+    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 right = glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+    float speed = 5.0f;
+    float sensitivity = 0.1f;
+    float zoom = 45.0f;
+    
+    Camera(glm::vec3 position = glm::vec3(0.0f, 0.0f, 0.0f)) : position(position) {
+        updateCameraVectors();
+    }
+    
+    glm::mat4 getViewMatrix() const {
+        return glm::lookAt(position, position + front, up);
+    }
+    
+    void processKeyboard(int direction, float deltaTime) {
+        float velocity = speed * deltaTime;
+        
+        if (direction == 0)
+            position += front * velocity;
+        if (direction == 1)
+            position -= front * velocity;
+        if (direction == 2)
+            position -= right * velocity;
+        if (direction == 3)
+            position += right * velocity;
+        if (direction == 4)
+            position += worldUp * velocity;
+        if (direction == 5)
+            position -= worldUp * velocity;
+    }
+    
+    void processMouseMovement(float xoffset, float yoffset, bool constrainPitch = true) {
+        xoffset *= sensitivity;
+        yoffset *= sensitivity;
+        
+        yaw += xoffset;
+        pitch += yoffset;
+        
+        if (constrainPitch) {
+            if (pitch > 89.0f)
+                pitch = 89.0f;
+            if (pitch < -89.0f)
+                pitch = -89.0f;
+        }
+        
+        updateCameraVectors();
+    }
+    
+    void processMouseScroll(float yoffset) {
+        zoom -= yoffset;
+        if (zoom < 1.0f)
+            zoom = 1.0f;
+        if (zoom > 45.0f)
+            zoom = 45.0f;
+    }
+
+private:
+    void updateCameraVectors() {
+        glm::vec3 newFront;
+        newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront.y = sin(glm::radians(pitch));
+        newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        front = glm::normalize(newFront);
+        
+        right = glm::normalize(glm::cross(front, worldUp));
+        up = glm::normalize(glm::cross(right, front));
     }
 };
 
@@ -309,16 +387,72 @@ private:
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
 
+    Camera camera;
+    bool firstMouse = true;
+    float lastX = WIDTH / 2.0f;
+    float lastY = HEIGHT / 2.0f;
+    
+    std::unordered_map<int, bool> keyStates;
+    double lastMouseX = 0.0, lastMouseY = 0.0;
+    bool mousePressed = false;
+
     bool framebufferResized = false;
+
+    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        if (action == GLFW_PRESS) {
+            app->keyStates[key] = true;
+        } else if (action == GLFW_RELEASE) {
+            app->keyStates[key] = false;
+        }
+    }
+
+    static void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        
+        if (app->firstMouse) {
+            app->lastX = xpos;
+            app->lastY = ypos;
+            app->firstMouse = false;
+        }
+        
+        float xoffset = xpos - app->lastX;
+        float yoffset = app->lastY - ypos;
+        
+        app->lastX = xpos;
+        app->lastY = ypos;
+        
+        app->camera.processMouseMovement(xoffset, yoffset);
+}
+
+    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+            app->mousePressed = (action == GLFW_PRESS);
+            glfwSetInputMode(window, GLFW_CURSOR, app->mousePressed ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        }
+    }
+
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->camera.processMouseScroll(static_cast<float>(yoffset));
+    }
 
     void initWindow() {
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-        window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan - Movable Camera", nullptr, nullptr);
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+        
+        glfwSetKeyCallback(window, keyCallback);
+        glfwSetCursorPosCallback(window, mouseCallback);
+        glfwSetMouseButtonCallback(window, mouseButtonCallback);
+        glfwSetScrollCallback(window, scrollCallback);
+        
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     }
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
@@ -363,6 +497,10 @@ private:
     }
 
     void cleanupSwapChain() {
+        vkDestroyImageView(device, depthImageView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthImageMemory, nullptr);
+
         for (auto framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
         }
@@ -380,11 +518,14 @@ private:
         vkDeviceWaitIdle(device);
         
         cleanupSwapChain();
-
-        vkDestroyImageView(device, depthImageView, nullptr);
-        vkDestroyImage(device, depthImage, nullptr);
-        vkFreeMemory(device, depthImageMemory, nullptr);
-
+        
+        safeDestroyPipeline(graphicsPipeline);
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+        safeDestroyRenderPass(renderPass);
+        
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+        
         for (size_t i = 0; i < uniformBuffers.size(); i++) {
             if (uniformBuffers[i] != VK_NULL_HANDLE) {
                 vkDestroyBuffer(device, uniformBuffers[i], nullptr);
@@ -396,42 +537,59 @@ private:
                 vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
             }
         }
-        
         uniformBuffers.clear();
         uniformBuffersMemory.clear();
         uniformBuffersMapped.clear();
-
-        vkDestroyPipeline(device, graphicsPipeline, nullptr);
-        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-        vkDestroyRenderPass(device, renderPass, nullptr);
-
-        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-
+        
         vkDestroyBuffer(device, indexBuffer, nullptr);
         vkFreeMemory(device, indexBufferMemory, nullptr);
-        
         vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);
-
+        
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
             vkDestroyFence(device, inFlightFences[i], nullptr);
         }
-
+        
         vkDestroyCommandPool(device, commandPool, nullptr);
+        
         vkDestroyDevice(device, nullptr);
-
+        
         if (enableValidationLayers) {
             DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
         }
-
+        
         vkDestroySurfaceKHR(instance, surface, nullptr);
         vkDestroyInstance(instance, nullptr);
-
+        
         glfwDestroyWindow(window);
         glfwTerminate();
+    }
+
+    void processInput(float deltaTime) {
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            glfwSetWindowShouldClose(window, true);
+        }
+        
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            camera.processKeyboard(0, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            camera.processKeyboard(1, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            camera.processKeyboard(2, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            camera.processKeyboard(3, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            camera.processKeyboard(4, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+            camera.processKeyboard(5, deltaTime);
+            
+        if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+            camera.speed = 15.0f;
+        } else {
+            camera.speed = 5.0f;
+        }
     }
 
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
@@ -454,7 +612,19 @@ private:
         return imageView;
     }
 
+    void safeDestroyPipeline(VkPipeline& pipeline) {
+        if (pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device, pipeline, nullptr);
+            pipeline = VK_NULL_HANDLE;
+        }
+    }
 
+    void safeDestroyRenderPass(VkRenderPass& renderPass) {
+        if (renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, renderPass, nullptr);
+            renderPass = VK_NULL_HANDLE;
+        }
+    }
     void createImage(uint32_t width, uint32_t height, VkFormat format,
                     VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
                     VkImage &image, VkDeviceMemory &imageMemory) {
@@ -621,36 +791,27 @@ private:
 
     void recreateSwapChain() {
         vkDeviceWaitIdle(device);
-        
-        cleanupSwapChain();
 
-        for (size_t i = 0; i < uniformBuffers.size(); i++) {
-            if (uniformBuffers[i] != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-            }
-            if (uniformBuffersMemory[i] != VK_NULL_HANDLE) {
-                if (uniformBuffersMapped[i]) {
-                    vkUnmapMemory(device, uniformBuffersMemory[i]);
-                }
-                vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
-            }
-        }
-        uniformBuffers.clear();
-        uniformBuffersMemory.clear();
-        uniformBuffersMapped.clear();
+        vkDestroyImageView(device, depthImageView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthImageMemory, nullptr);
         
-        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+        for (auto framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+        swapChainFramebuffers.clear();
+
+        for (auto imageView : swapChainImageViews) {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+        swapChainImageViews.clear();
+
+        vkDestroySwapchainKHR(device, swapChain, nullptr);
         
         createSwapChain();
         createImageViews();
-        createRenderPass();
-        createGraphicsPipeline();
         createDepthResources();
         createFramebuffers();
-        
-        createUniformBuffers();
-        createDescriptorPool();
-        createDescriptorSets();
     }
 
     void createInstance() {
@@ -1389,6 +1550,8 @@ void createRenderPass() {
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
 
+        processInput(deltaTime);
+
         for (auto& gameObject : gameObjects) {
             physics_integrator.integrate(
                 gameObject.position, 
@@ -1396,14 +1559,19 @@ void createRenderPass() {
                 gameObject.acceleration, 
                 deltaTime
             );
+            
+            if (gameObject.position.y < -2.0f) {
+                gameObject.position.y = -2.0f;
+                gameObject.velocity.y *= -1.0f;
+            }
+            
+            gameObject.rotation.y += deltaTime * 1.0f;
         }
 
-        glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 3.0f, 8.0f), 
-                                    glm::vec3(0.0f, 0.0f, 0.0f), 
-                                    glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 proj = glm::perspective(glm::radians(45.0f),
+        glm::mat4 view = camera.getViewMatrix();
+        glm::mat4 proj = glm::perspective(glm::radians(camera.zoom),
                                         swapChainExtent.width / (float)swapChainExtent.height,
-                                        0.1f, 50.0f);
+                                        0.1f, 100.0f);
         proj[1][1] *= -1;
 
         for (size_t i = 0; i < gameObjects.size(); i++) {
@@ -1523,10 +1691,26 @@ void createRenderPass() {
     VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
         for (const auto& availablePresentMode : availablePresentModes) {
             if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+                std::cout << "Using MAILBOX present mode (triple buffering)" << std::endl;
                 return availablePresentMode;
             }
         }
-
+        
+        for (const auto& availablePresentMode : availablePresentModes) {
+            if (availablePresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+                std::cout << "Using IMMEDIATE present mode (no VSync)" << std::endl;
+                return availablePresentMode;
+            }
+        }
+        
+        for (const auto& availablePresentMode : availablePresentModes) {
+            if (availablePresentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
+                std::cout << "Using FIFO_RELAXED present mode" << std::endl;
+                return availablePresentMode;
+            }
+        }
+        
+        std::cout << "Using FIFO present mode (VSync)" << std::endl;
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
@@ -1699,6 +1883,7 @@ void createRenderPass() {
     }
 };
 
+
 int main() {
     HelloTriangleApplication app;
 
@@ -1708,14 +1893,18 @@ int main() {
             .setScale(0.5f)
             .setVelocity(0.0f, 3.0f, 0.0f)
             .setAcceleration(0.0f, -3.0f, 0.0f)
-            .setColor(1.0f, 0.0f, 0.0f);  // Red
+            .setColor(1.0f, 0.0f, 0.0f);
 
         app.createObject()
             .setPosition(2.0f, 1.0f, 0.0f)
             .setScale(0.4f)
-            .setVelocity(-1.5f, 0.0f, 0.0f)
             .setAcceleration(0.0f, -3.0f, 0.0f)
-            .setColor(0.0f, 0.0f, 1.0f);  // Blue
+            .setColor(0.0f, 0.0f, 1.0f);
+            
+        app.createObject()
+            .setPosition(0.0f, 0.0f, -3.0f)
+            .setScale(0.3f)
+            .setColor(0.0f, 1.0f, 0.0f);
         
         app.run();
 
