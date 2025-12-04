@@ -149,8 +149,6 @@ const uint32_t HEIGHT = 600;
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
-constexpr int MAX_OBJECTS = 1;
-
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
 };
@@ -305,24 +303,107 @@ public:
         cleanup();
     }
 
-    GameObject& createObject() {
-        gameObjects.emplace_back();
-        GameObject& newObj = gameObjects.back();
-
-        newObj.uniformBufferIndex = static_cast<uint32_t>(gameObjects.size() - 1) * MAX_FRAMES_IN_FLIGHT;
-        newObj.descriptorSetIndex = static_cast<uint32_t>(gameObjects.size() - 1) * MAX_FRAMES_IN_FLIGHT;
+    void cleanupUniformBuffers() {
+        for (size_t i = 0; i < uniformBuffers.size(); i++) {
+            if (uniformBuffers[i] != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+            }
+            if (uniformBuffersMemory[i] != VK_NULL_HANDLE) {
+                if (uniformBuffersMapped[i]) {
+                    vkUnmapMemory(device, uniformBuffersMemory[i]);
+                }
+                vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+            }
+        }
+        uniformBuffers.clear();
+        uniformBuffersMemory.clear();
+        uniformBuffersMapped.clear();
         
-        return newObj;
+        if (descriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+            descriptorPool = VK_NULL_HANDLE;
+        }
+        descriptorSets.clear();
     }
 
-    void removeObject(uint32_t index) {
-        if (index < gameObjects.size()) {
-            gameObjects.erase(gameObjects.begin() + index);
+    void cleanupObjectResources(uint32_t objectIndex) {
+        for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; frame++) {
+            size_t bufferIndex = objectIndex * MAX_FRAMES_IN_FLIGHT + frame;
+            
+            if (bufferIndex < uniformBuffers.size() && uniformBuffers[bufferIndex] != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, uniformBuffers[bufferIndex], nullptr);
+                uniformBuffers[bufferIndex] = VK_NULL_HANDLE;
+            }
+            
+            if (bufferIndex < uniformBuffersMemory.size() && uniformBuffersMemory[bufferIndex] != VK_NULL_HANDLE) {
+                if (bufferIndex < uniformBuffersMapped.size() && uniformBuffersMapped[bufferIndex]) {
+                    vkUnmapMemory(device, uniformBuffersMemory[bufferIndex]);
+                    uniformBuffersMapped[bufferIndex] = nullptr;
+                }
+                vkFreeMemory(device, uniformBuffersMemory[bufferIndex], nullptr);
+                uniformBuffersMemory[bufferIndex] = VK_NULL_HANDLE;
+            }
+        }
+    }
+
+    void recreateDescriptorResources() {
+        if (descriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+            descriptorPool = VK_NULL_HANDLE;
+        }
+        descriptorSets.clear();
+        
+        createDescriptorPool();
+        createDescriptorSets();
+        
+        for (auto& cmdBuffer : commandBuffers) {
+            vkFreeCommandBuffers(device, commandPool, 1, &cmdBuffer);
+        }
+        commandBuffers.clear();
+        createCommandBuffers();
+    }
+
+    void createObjectResources(uint32_t objectIndex) {
+        for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; frame++) {
+            size_t bufferIndex = objectIndex * MAX_FRAMES_IN_FLIGHT + frame;
+            
+            if (bufferIndex >= uniformBuffers.size()) {
+                uniformBuffers.resize(bufferIndex + 1, VK_NULL_HANDLE);
+                uniformBuffersMemory.resize(bufferIndex + 1, VK_NULL_HANDLE);
+                uniformBuffersMapped.resize(bufferIndex + 1, nullptr);
+            }
+            
+            VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+            createBuffer(bufferSize, 
+                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       uniformBuffers[bufferIndex], 
+                       uniformBuffersMemory[bufferIndex]);
+            
+            vkMapMemory(device, uniformBuffersMemory[bufferIndex], 0, bufferSize, 0, &uniformBuffersMapped[bufferIndex]);
         }
     }
 
     void clearAllObjects() {
+        vkDeviceWaitIdle(device);
         gameObjects.clear();
+        
+        uint32_t savedFrame = currentFrame;
+        currentFrame = 0;
+        
+        cleanupUniformBuffers();
+        
+        createUniformBuffers();
+        createDescriptorPool();
+        createDescriptorSets();
+        
+        for (auto& cmdBuffer : commandBuffers) {
+            vkFreeCommandBuffers(device, commandPool, 1, &cmdBuffer);
+        }
+        commandBuffers.clear();
+        createCommandBuffers();
+        
+        currentFrame = savedFrame;
     }
 
     GameObject& getObject(uint32_t index) {
@@ -331,6 +412,53 @@ public:
 
     size_t getObjectCount() const {
         return gameObjects.size();
+    }
+
+    GameObject& createObject() {
+        static constexpr size_t MAX_OBJECTS = 256;
+        
+        if (gameObjects.size() >= MAX_OBJECTS) {
+            throw std::runtime_error("Maximum object limit reached!");
+        }
+        
+        gameObjects.emplace_back();
+        GameObject& newObj = gameObjects.back();
+        size_t objIndex = gameObjects.size() - 1;
+        
+        newObj.uniformBufferIndex = static_cast<uint32_t>(objIndex) * MAX_FRAMES_IN_FLIGHT;
+        newObj.descriptorSetIndex = static_cast<uint32_t>(objIndex) * MAX_FRAMES_IN_FLIGHT;
+        
+        vkDeviceWaitIdle(device);
+        
+        try {
+            createObjectResources(static_cast<uint32_t>(objIndex));
+            
+            recreateDescriptorResources();
+        } catch (const std::exception& e) {
+            gameObjects.pop_back();
+            throw std::runtime_error(std::string("Failed to create object: ") + e.what());
+        }
+        
+        return newObj;
+    }
+
+    void removeObject(uint32_t index) {
+        if (index >= gameObjects.size()) {
+            return;
+        }
+        
+        vkDeviceWaitIdle(device);
+        
+        cleanupObjectResources(index);
+        
+        gameObjects.erase(gameObjects.begin() + index);
+        
+        for (size_t i = index; i < gameObjects.size(); i++) {
+            gameObjects[i].uniformBufferIndex = static_cast<uint32_t>(i) * MAX_FRAMES_IN_FLIGHT;
+            gameObjects[i].descriptorSetIndex = static_cast<uint32_t>(i) * MAX_FRAMES_IN_FLIGHT;
+        }
+        
+        recreateDescriptorResources();
     }
 
 private:
